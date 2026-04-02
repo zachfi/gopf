@@ -162,6 +162,24 @@ type Anchor interface {
 	Rules() ([]Rule, error)
 	Insert(r *Rule) error
 	DeleteIndex(nr int) error
+	RuleStats() ([]RuleStats, error)
+}
+
+// RuleStats holds per-rule counters retrieved via DIOCGETRULE.
+type RuleStats struct {
+	Label       string
+	Nr          uint32
+	Anchor      string
+	Interface   string
+	Action      string
+	Direction   string
+	Evaluations uint64
+	PacketsIn   uint64
+	PacketsOut  uint64
+	BytesIn     uint64
+	BytesOut    uint64
+	StatesCur   uint64
+	StatesTot   uint64
 }
 
 // QueueStats holds stats from a queue.
