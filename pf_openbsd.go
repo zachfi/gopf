@@ -165,6 +165,7 @@ const (
 	/* address types */
 	PF_ADDR_ADDRMASK = C.PF_ADDR_ADDRMASK
 	PF_ADDR_DYNIFTL  = C.PF_ADDR_DYNIFTL
+	PF_ADDR_TABLE    = C.PF_ADDR_TABLE
 	PF_ADDR_NONE     = C.PF_ADDR_NONE
 
 	/* keep state types */

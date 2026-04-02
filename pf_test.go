@@ -136,3 +136,36 @@ func TestPfRules(t *testing.T) {
 		}
 	}
 }
+
+func TestPfRuleStats(t *testing.T) {
+	pf, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pf.Close()
+
+	anchors := []string{""}
+	a, err := pf.Anchors()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	anchors = append(anchors, a...)
+
+	for _, aname := range anchors {
+		t.Logf("anchor %q", aname)
+		anchor, err := pf.Anchor(aname)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		stats, err := anchor.RuleStats()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		for _, s := range stats {
+			t.Logf("rule stats: %+v", s)
+		}
+	}
+}

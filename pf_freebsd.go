@@ -102,6 +102,12 @@ pfgetifname(struct pf_addr_wrap *a)
 	return a->v.ifname;
 }
 
+char*
+pfgettblname(struct pf_addr_wrap *a)
+{
+	return a->v.tblname;
+}
+
 void
 pfsetifname(struct pf_addr_wrap *a, char *ifname){
 	memset(&a->v.a.addr, 0x0, sizeof(a->v.a.addr));
@@ -159,11 +165,15 @@ const (
 	/* rule actions */
 	PF_PASS  = C.PF_PASS
 	PF_BLOCK = C.PF_DROP
+	PF_MATCH = C.PF_MATCH
 	PF_RDR   = C.PF_RDR
+	Match     = PF_MATCH
 
 	/* address types */
 	PF_ADDR_ADDRMASK = C.PF_ADDR_ADDRMASK
 	PF_ADDR_DYNIFTL  = C.PF_ADDR_DYNIFTL
+	PF_ADDR_TABLE    = C.PF_ADDR_TABLE
+	PF_ADDR_NONE     = C.PF_ADDR_NONE
 
 	/* keep state types */
 	PF_STATE_NORMAL = C.PF_STATE_NORMAL
@@ -439,7 +449,201 @@ func (p *FreePf) Anchors() ([]string, error) {
 }
 
 func (p *FreePf) Anchor(anchor string) (Anchor, error) {
+	if anchor == "" {
+		return &FreeAnchor{pf: p}, nil
+	}
+
+	anchors, err := p.Anchors()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, a := range anchors {
+		if a == anchor {
+			return &FreeAnchor{name: a, pf: p}, nil
+		}
+	}
+
 	return nil, fmt.Errorf("no such anchor %q", anchor)
+}
+
+type FreeAnchor struct {
+	name string
+	pf   *FreePf
+}
+
+func (a *FreeAnchor) Rules() ([]Rule, error) {
+	pr := &C.struct_pfioc_rule{}
+
+	aname := C.CString(a.name)
+	defer C.free(unsafe.Pointer(aname))
+	C.strlcpy(&pr.anchor[0], aname, C.size_t(unsafe.Sizeof(pr.anchor)))
+
+	if err := ioctl(a.pf.fd.Fd(), DIOCGETRULES, unsafe.Pointer(pr)); err != nil {
+		return nil, err
+	}
+
+	count := int(pr.nr)
+	ticket := pr.ticket
+	var rules []Rule
+
+	for i := 0; i < count; i++ {
+		ir := &C.struct_pfioc_rule{}
+		C.strlcpy(&ir.anchor[0], aname, C.size_t(unsafe.Sizeof(ir.anchor)))
+		ir.ticket = ticket
+		ir.nr = C.u_int32_t(i)
+
+		if err := ioctl(a.pf.fd.Fd(), DIOCGETRULE, unsafe.Pointer(ir)); err != nil {
+			return nil, err
+		}
+
+		if ir.anchor_call[0] != 0 {
+			continue
+		}
+
+		r := Rule{Nr: uint32(ir.nr)}
+
+		switch ir.rule.action {
+		case PF_PASS:
+			r.Action = Pass
+		case PF_BLOCK:
+			r.Action = Block
+		case PF_MATCH:
+			r.Action = Match
+		default:
+			return nil, fmt.Errorf("rule %d: unknown action %d", i, ir.rule.action)
+		}
+
+		switch ir.rule.direction {
+		case PF_INOUT:
+			r.Direction = InOut
+		case PF_IN:
+			r.Direction = In
+		case PF_OUT:
+			r.Direction = Out
+		default:
+			return nil, fmt.Errorf("rule %d: unknown direction %d", i, ir.rule.direction)
+		}
+
+		if ir.rule.log != 0 {
+			r.Log = true
+		}
+
+		if ir.rule.quick != 0 {
+			r.Quick = true
+		}
+
+		r.Interface = C.GoString(&ir.rule.ifname[0])
+		r.Tag = C.GoString(&ir.rule.tagname[0])
+
+		r.Src = Target{Port: ntohs(uint16(ir.rule.src.port[0]))}
+		switch ir.rule.src.addr._type {
+		case PF_ADDR_ADDRMASK:
+			_, ipnet, err := net.ParseCIDR(addrwrapstr(&ir.rule.src.addr, int(ir.rule.af)))
+			if err != nil {
+				return nil, fmt.Errorf("rule %d: bad src addr: %w", i, err)
+			}
+			r.Src.Addr = AddrIPMask{*ipnet}
+		case PF_ADDR_DYNIFTL:
+			r.Src.Addr = AddrDynIf{addrwrapstr(&ir.rule.src.addr, int(ir.rule.af))}
+		case PF_ADDR_TABLE:
+			r.Src.Addr = AddrTable(C.GoString(C.pfgettblname(&ir.rule.src.addr)))
+		default:
+			return nil, fmt.Errorf("rule %d: unknown src addr type %d", i, ir.rule.src.addr._type)
+		}
+
+		r.Dst = Target{Port: ntohs(uint16(ir.rule.dst.port[0]))}
+		switch ir.rule.dst.addr._type {
+		case PF_ADDR_ADDRMASK:
+			_, ipnet, err := net.ParseCIDR(addrwrapstr(&ir.rule.dst.addr, int(ir.rule.af)))
+			if err != nil {
+				return nil, fmt.Errorf("rule %d: bad dst addr: %w", i, err)
+			}
+			r.Dst.Addr = AddrIPMask{*ipnet}
+		case PF_ADDR_DYNIFTL:
+			r.Dst.Addr = AddrDynIf{addrwrapstr(&ir.rule.dst.addr, int(ir.rule.af))}
+		case PF_ADDR_TABLE:
+			r.Dst.Addr = AddrTable(C.GoString(C.pfgettblname(&ir.rule.dst.addr)))
+		default:
+			return nil, fmt.Errorf("rule %d: unknown dst addr type %d", i, ir.rule.dst.addr._type)
+		}
+
+		rules = append(rules, r)
+	}
+
+	return rules, nil
+}
+
+func (a *FreeAnchor) Insert(r *Rule) error {
+	return fmt.Errorf("Insert not yet implemented for FreeBSD")
+}
+
+func (a *FreeAnchor) DeleteIndex(nr int) error {
+	return fmt.Errorf("DeleteIndex not yet implemented for FreeBSD")
+}
+
+// RuleStats returns per-rule evaluation and traffic counters for this anchor.
+func (a *FreeAnchor) RuleStats() ([]RuleStats, error) {
+	pr := &C.struct_pfioc_rule{}
+
+	aname := C.CString(a.name)
+	defer C.free(unsafe.Pointer(aname))
+	C.strlcpy(&pr.anchor[0], aname, C.size_t(unsafe.Sizeof(pr.anchor)))
+
+	if err := ioctl(a.pf.fd.Fd(), DIOCGETRULES, unsafe.Pointer(pr)); err != nil {
+		return nil, err
+	}
+
+	n := int(pr.nr)
+	ticket := pr.ticket
+	var rules []RuleStats
+
+	for i := 0; i < n; i++ {
+		ir := &C.struct_pfioc_rule{}
+		C.strlcpy(&ir.anchor[0], aname, C.size_t(unsafe.Sizeof(ir.anchor)))
+		ir.ticket = ticket
+		ir.nr = C.u_int32_t(i)
+
+		if err := ioctl(a.pf.fd.Fd(), DIOCGETRULE, unsafe.Pointer(ir)); err != nil {
+			return nil, err
+		}
+
+		if ir.anchor_call[0] != 0 {
+			continue
+		}
+
+		label := C.GoString(&ir.rule.label[0])
+		if label == "" {
+			label = fmt.Sprintf("@%d", i)
+		}
+
+		action := ""
+		if int(ir.rule.action) < len(actiontypes) {
+			action = actiontypes[ir.rule.action]
+		}
+		direction := ""
+		if int(ir.rule.direction) < len(dirtypes) {
+			direction = dirtypes[ir.rule.direction]
+		}
+
+		rules = append(rules, RuleStats{
+			Label:       label,
+			Nr:          uint32(ir.rule.nr),
+			Anchor:      a.name,
+			Interface:   C.GoString(&ir.rule.ifname[0]),
+			Action:      action,
+			Direction:   direction,
+			Evaluations: uint64(ir.rule.evaluations),
+			PacketsIn:   uint64(ir.rule.packets[0]),
+			PacketsOut:  uint64(ir.rule.packets[1]),
+			BytesIn:     uint64(ir.rule.bytes[0]),
+			BytesOut:    uint64(ir.rule.bytes[1]),
+			StatesCur:   uint64(uintptr(unsafe.Pointer(ir.rule.states_cur))),
+			StatesTot:   uint64(uintptr(unsafe.Pointer(ir.rule.states_tot))),
+		})
+	}
+
+	return rules, nil
 }
 
 func (p *FreePf) qstats(altq *C.struct_pfioc_altq) (*QueueStats, error) {
