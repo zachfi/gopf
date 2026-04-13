@@ -667,8 +667,8 @@ func (a *FreeAnchor) RuleStats() ([]RuleStats, error) {
 			PacketsOut:  uint64(ir.rule.packets[1]),
 			BytesIn:     uint64(ir.rule.bytes[0]),
 			BytesOut:    uint64(ir.rule.bytes[1]),
-			StatesCur:   uint64(uintptr(unsafe.Pointer(ir.rule.states_cur))),
-			StatesTot:   uint64(uintptr(unsafe.Pointer(ir.rule.states_tot))),
+			StatesCur:   uint64(ir.rule.u_states_cur),
+			StatesTot:   uint64(ir.rule.u_states_tot),
 		})
 	}
 
